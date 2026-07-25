@@ -6,7 +6,11 @@ import time
 
 from src.tools import search, fetch
 from src.llm_client import LLMClient
-from src.reliability import with_retry, RetryExhaustedError, CircuitBreaker, call_with_protection, CircuitOpenError
+from src.reliability import (
+    with_retry, RetryExhaustedError, CircuitBreaker,
+    call_with_protection, CircuitOpenError,
+    check_relevance, LowRelevanceError
+)
 
 
 class StepStatus(Enum):
@@ -39,18 +43,19 @@ class ResearchAgent:
         self.fetch_breaker = CircuitBreaker(name="fetch", failure_threshold=3, reset_timeout=30)
         self.llm_breaker = CircuitBreaker(name="llm", failure_threshold=3, reset_timeout=30)
 
-
-
     def run(self, query: str) -> RunState:
         state = RunState(query=query)
 
-        # Step 1: search (with retry)
+        # Step 1: search (retry + circuit breaker)
         start = time.time()
         try:
-            search_result = with_retry(lambda: search.run(query), step_name="search")
+            search_result = call_with_protection(
+                lambda: search.run(query), step_name="search",
+                breaker=self.search_breaker
+            )
             status = StepStatus.SUCCESS
             error = None
-        except RetryExhaustedError as e:
+        except (RetryExhaustedError, CircuitOpenError) as e:
             search_result = {"urls": [], "snippets": []}
             status = StepStatus.FAILED
             error = str(e)
@@ -63,13 +68,16 @@ class ResearchAgent:
         if status == StepStatus.FAILED:
             return state  # no point continuing without search results
 
-        # Step 2: fetch (with retry)
+        # Step 2: fetch (retry + circuit breaker)
         start = time.time()
         try:
-            fetch_result = with_retry(lambda: fetch.run(search_result["urls"]), step_name="fetch")
+            fetch_result = call_with_protection(
+                lambda: fetch.run(search_result["urls"]), step_name="fetch",
+                breaker=self.fetch_breaker
+            )
             status = StepStatus.SUCCESS
             error = None
-        except RetryExhaustedError as e:
+        except (RetryExhaustedError, CircuitOpenError) as e:
             fetch_result = {"texts": [], "failed_urls": []}
             status = StepStatus.FAILED
             error = str(e)
@@ -86,14 +94,27 @@ class ResearchAgent:
             ))
             return state
 
-        # Step 3: synthesize (with retry)
+        # Relevance gate — catches off-topic/junk results before an LLM call
+        try:
+            check_relevance(query, fetch_result["texts"])
+        except LowRelevanceError as e:
+            state.steps.append(StepResult(
+                name="synthesize", status=StepStatus.FAILED,
+                error=f"relevance check failed: {e}"
+            ))
+            return state
+
+        # Step 3: synthesize (retry + circuit breaker)
         start = time.time()
         try:
-            synth_result = with_retry(lambda: self.llm.synthesize(fetch_result["texts"]), step_name="synthesize")
+            synth_result = call_with_protection(
+                lambda: self.llm.synthesize(fetch_result["texts"]),
+                step_name="synthesize", breaker=self.llm_breaker
+            )
             status = StepStatus.SUCCESS
             error = None
             tokens = synth_result["tokens"]
-        except RetryExhaustedError as e:
+        except (RetryExhaustedError, CircuitOpenError) as e:
             synth_result = {"text": None}
             status = StepStatus.FAILED
             error = str(e)
