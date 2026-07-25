@@ -6,7 +6,7 @@ import time
 
 from src.tools import search, fetch
 from src.llm_client import LLMClient
-from src.reliability import with_retry, RetryExhaustedError
+from src.reliability import with_retry, RetryExhaustedError, CircuitBreaker, call_with_protection, CircuitOpenError
 
 
 class StepStatus(Enum):
@@ -35,6 +35,11 @@ class RunState:
 class ResearchAgent:
     def __init__(self):
         self.llm = LLMClient()
+        self.search_breaker = CircuitBreaker(name="search", failure_threshold=3, reset_timeout=30)
+        self.fetch_breaker = CircuitBreaker(name="fetch", failure_threshold=3, reset_timeout=30)
+        self.llm_breaker = CircuitBreaker(name="llm", failure_threshold=3, reset_timeout=30)
+
+
 
     def run(self, query: str) -> RunState:
         state = RunState(query=query)
