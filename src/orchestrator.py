@@ -6,6 +6,7 @@ import time
 
 from src.tools import search, fetch
 from src.llm_client import LLMClient
+from src.reliability import with_retry, RetryExhaustedError
 
 
 class StepStatus(Enum):
@@ -38,29 +39,64 @@ class ResearchAgent:
     def run(self, query: str) -> RunState:
         state = RunState(query=query)
 
+        # Step 1: search (with retry)
         start = time.time()
-        search_result = search.run(query)
+        try:
+            search_result = with_retry(lambda: search.run(query), step_name="search")
+            status = StepStatus.SUCCESS
+            error = None
+        except RetryExhaustedError as e:
+            search_result = {"urls": [], "snippets": []}
+            status = StepStatus.FAILED
+            error = str(e)
         latency = (time.time() - start) * 1000
         state.steps.append(StepResult(
-            name="search", status=StepStatus.SUCCESS,
-            output=search_result, latency_ms=latency
+            name="search", status=status, output=search_result,
+            error=error, latency_ms=latency
         ))
 
+        if status == StepStatus.FAILED:
+            return state  # no point continuing without search results
+
+        # Step 2: fetch (with retry)
         start = time.time()
-        fetch_result = fetch.run(search_result["urls"])
+        try:
+            fetch_result = with_retry(lambda: fetch.run(search_result["urls"]), step_name="fetch")
+            status = StepStatus.SUCCESS
+            error = None
+        except RetryExhaustedError as e:
+            fetch_result = {"texts": [], "failed_urls": []}
+            status = StepStatus.FAILED
+            error = str(e)
         latency = (time.time() - start) * 1000
         state.steps.append(StepResult(
-            name="fetch", status=StepStatus.SUCCESS,
-            output=fetch_result, latency_ms=latency
+            name="fetch", status=status, output=fetch_result,
+            error=error, latency_ms=latency
         ))
 
+        if not fetch_result["texts"]:
+            state.steps.append(StepResult(
+                name="synthesize", status=StepStatus.FAILED,
+                error="no fetched content available to synthesize"
+            ))
+            return state
+
+        # Step 3: synthesize (with retry)
         start = time.time()
-        synth_result = self.llm.synthesize(fetch_result["texts"])
+        try:
+            synth_result = with_retry(lambda: self.llm.synthesize(fetch_result["texts"]), step_name="synthesize")
+            status = StepStatus.SUCCESS
+            error = None
+            tokens = synth_result["tokens"]
+        except RetryExhaustedError as e:
+            synth_result = {"text": None}
+            status = StepStatus.FAILED
+            error = str(e)
+            tokens = 0
         latency = (time.time() - start) * 1000
         state.steps.append(StepResult(
-            name="synthesize", status=StepStatus.SUCCESS,
-            output=synth_result, latency_ms=latency,
-            tokens_used=synth_result["tokens"]
+            name="synthesize", status=status, output=synth_result,
+            error=error, latency_ms=latency, tokens_used=tokens
         ))
 
         return state
@@ -73,5 +109,11 @@ if __name__ == "__main__":
     print(f"\nRun ID: {state.run_id}")
     print(f"Query: {state.query}\n")
     for step in state.steps:
-        print(f"[{step.name}] {step.status.value} — {step.latency_ms:.0f}ms")
-    print(f"\nFinal summary:\n{state.steps[-1].output['text']}")
+        print(f"[{step.name}] {step.status.value} — {step.latency_ms:.0f}ms" +
+              (f" — ERROR: {step.error}" if step.error else ""))
+
+    last_step = state.steps[-1]
+    if last_step.status == StepStatus.SUCCESS:
+        print(f"\nFinal summary:\n{last_step.output['text']}")
+    else:
+        print(f"\nPipeline failed at step '{last_step.name}': {last_step.error}")
