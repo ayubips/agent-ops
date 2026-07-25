@@ -30,6 +30,16 @@ class LLMClient:
             "text": response.choices[0].message.content,
             "tokens": response.usage.total_tokens,
         }
+    def fallback_summary(self, texts: list[str]) -> dict:
+        """
+        Degraded, non-LLM fallback used when synthesis is unavailable
+        (circuit open, retries exhausted). Returns the first fetched
+        snippet, truncated, rather than nothing at all.
+        """
+        if not texts:
+            return {"text": "No summary available — no content could be retrieved.", "tokens": 0}
+        snippet = texts[0][:400].rsplit(".", 1)[0] + "."
+        return {"text": f"[Fallback — LLM summary unavailable] {snippet}", "tokens": 0}
 
 
 if __name__ == "__main__":

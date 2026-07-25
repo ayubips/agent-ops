@@ -15,3 +15,8 @@ in the reliability layer.
 gating) complete. The garbage-query bug found in Day 2 testing is now fixed:
 off-topic/junk fetched content fails explicitly instead of producing a
 confident but unrelated summary.
+
+## Status: Day 6 of 15 — reliability layer complete: retry with backoff,
+fail-fast on non-retryable errors, circuit breaker, relevance gating, and
+graceful fallback (degraded response instead of hard failure). Covered by
+a pytest suite (9 tests).
