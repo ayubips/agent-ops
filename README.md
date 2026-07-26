@@ -1,58 +1,124 @@
 # Agent Ops
 
-A lightweight orchestration and observability layer for multi-step LLM agents.
+A reliability and observability layer for multi-step LLM agents — built to answer
+a question most agent demos skip: **what happens when a step fails?**
 
-Currently implements a research agent: search → fetch → synthesize, with structured
-state tracking. Reliability (retries, circuit breaker, fallback, relevance checks)
-and observability (structured logging, cost/latency tracking) are being layered in next.
+This project implements a research agent (search → fetch → synthesize) wrapped in
+production-style infrastructure: retries with exponential backoff, circuit breakers
+per dependency, a relevance gate to catch off-topic results, graceful degradation
+via fallback responses, and structured observability (cost, latency, token usage)
+logged to SQLite.
 
-## Status: Day 2 of 15 — happy path working end-to-end.
-Known issue found in testing: garbage/off-topic queries can produce a confidently
-wrong summary rather than a clear failure. This is the first item being addressed
-in the reliability layer.
+## Why this exists
 
-## Status: Day 5 of 15 — reliability layer (retry, circuit breaker, relevance
-gating) complete. The garbage-query bug found in Day 2 testing is now fixed:
-off-topic/junk fetched content fails explicitly instead of producing a
-confident but unrelated summary.
+Most "AI agent" demos show the happy path. In practice, LLM APIs rate-limit, search
+APIs return junk, and dependencies go down. This project treats those as first-class
+concerns rather than afterthoughts — the same way you'd treat failure handling in any
+distributed system.
 
-## Status: Day 6 of 15 — reliability layer complete: retry with backoff,
-fail-fast on non-retryable errors, circuit breaker, relevance gating, and
-graceful fallback (degraded response instead of hard failure). Covered by
-a pytest suite (9 tests).
+## Architecture
 
-## What's built (Day 7/15)
-- Research agent pipeline: search → fetch → synthesize
-- Reliability layer: exponential backoff retry, fail-fast on non-retryable
-  errors (4xx), circuit breaker per dependency, relevance gating to catch
-  off-topic results, graceful fallback to a degraded response
-- 11 passing tests covering the reliability layer
+\```
+                 ┌─────────────┐
+   query ──────▶│ ResearchAgent│
+                 └──────┬───────┘
+                        │
+        ┌───────────────┼───────────────┐
+        ▼                ▼                ▼
+   ┌─────────┐     ┌─────────┐     ┌────────────┐
+   │  search  │────▶│  fetch  │────▶│ synthesize │
+   │ (Tavily) │     │ (HTML)  │     │  (Groq)    │
+   └────┬─────┘     └────┬────┘     └─────┬──────┘
+        │                 │                 │
+        └────────┬────────┴────────┬────────┘
+                  ▼                 ▼
+          ┌───────────────┐  ┌──────────────┐
+          │  reliability   │  │ observability │
+          │ retry/backoff  │  │  SQLite log   │
+          │ circuit breaker│  │ cost/latency  │
+          │ relevance gate │  │  per step     │
+          │ fallback path  │  └──────────────┘
+          └───────────────┘
+\```
 
-## What's next
-- Observability: structured logging of every run (tokens, cost, latency,
-  status) to SQLite, with a CLI report tool
-- Dockerization
-- Architecture diagram
+Each of the three pipeline steps runs through the same reliability wrapper
+(`call_with_protection`): retry with exponential backoff on transient failures,
+fail-fast on non-retryable errors (e.g. 401/403), and a circuit breaker that trips
+after repeated failures to avoid hammering a dead dependency. Every step's outcome
+— success, failure, or fallback — is logged with latency, token usage, and estimated
+cost.
 
-## Status: Day 9 of 15 — observability layer complete: structured logging
-(runs + steps tables in SQLite) with per-step latency, token usage, and
-estimated cost. Fallback-degraded runs are logged distinctly from full
-LLM successes.
+## What's implemented
 
-## Status: Day 10 of 15 — CLI report tool complete. Run `python report_cli.py`
-(optionally `python report_cli.py 20` for more recent runs) to see success
-rate, per-step latency/failure breakdown, total cost, and a recent-runs table
-pulled from the observability logs.
+**Pipeline**
+- Search (Tavily API) → fetch (HTML extraction) → synthesize (Groq / Llama 3.3 70B)
 
-## Running with Docker
-Build: `docker build -t agent-ops .`
-Run:   `docker run --rm --env-file .env -v "$(pwd)/logs:/app/logs" agent-ops`
-Report: `docker run --rm --env-file .env -v "$(pwd)/logs:/app/logs" agent-ops python report_cli.py`
+**Reliability**
+- Exponential backoff retry, capped at 3 attempts
+- Fail-fast on non-retryable errors (4xx auth/permission/bad-request responses)
+- Per-dependency circuit breaker (opens after 3 consecutive failures, 30s cooldown)
+- Relevance gate — rejects off-topic/low-content results before spending an LLM call
+- Graceful fallback — degrades to a raw-snippet response instead of hard-failing
+  when synthesis is unavailable
 
-## Status: Day 11 of 15 — Dockerized. Runs with API keys passed via
---env-file, logs persisted via volume mount so data survives container
-restarts.
+**Observability**
+- Every run and step logged to SQLite (`logs/runs.db`): status, latency, tokens,
+  estimated cost, error detail
+- `report_cli.py` — CLI summary: success rate, per-step latency/failure breakdown,
+  total cost, recent runs table
 
-## Status: Day 12 of 15 — full test suite (~19 tests) covering reliability
-layer, search/fetch tools (mocked, no real API calls), and orchestrator
-integration paths (happy path, early failure, relevance-gate rejection).
+**Testing**
+- ~19 tests (pytest) covering reliability logic, mocked search/fetch failure paths,
+  and orchestrator integration scenarios (happy path, early failure, relevance
+  rejection)
+
+**Deployment**
+- Dockerized, runtime secrets via `--env-file`, logs persisted via volume mount
+
+## How to run
+
+\```bash
+# Setup
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # add your GROQ_API_KEY and TAVILY_API_KEY
+
+# Run the pipeline
+python -m src.orchestrator
+
+# Run the test suite
+python -m pytest tests/ -v
+
+# View the observability report
+python report_cli.py
+
+# Docker
+docker build -t agent-ops .
+docker run --rm --env-file .env -v "$(pwd)/logs:/app/logs" agent-ops
+\```
+
+## Design decisions worth noting
+
+- **Reliability logic is centralized, not scattered.** `search.py`/`fetch.py` stay
+  simple and single-purpose; retry/circuit-breaker/fallback logic lives in
+  `reliability.py` and wraps calls at the orchestrator level. Easier to reason about
+  and test in isolation.
+- **Non-retryable vs retryable errors are distinguished.** A 401 will never succeed
+  on retry — retrying it anyway just wastes time and delays the circuit breaker.
+  Only transient errors (timeouts, 5xx, rate limits) get the backoff treatment.
+- **The relevance gate exists because of a real bug found during testing**: an
+  off-topic query didn't fail — it produced a confident, well-written summary about
+  something entirely unrelated. Retries and circuit breakers don't catch this
+  (nothing "failed"); a lightweight keyword-overlap check does.
+- **Fallback degrades gracefully rather than failing hard.** If synthesis is
+  unavailable, the user gets a raw snippet instead of nothing — a deliberate choice
+  about what "reliable" should mean for an end user.
+
+## Known limitations / next steps
+
+- Cost tracking uses a blended per-token rate rather than exact input/output split
+- No caching layer — identical queries re-run the full pipeline
+- SQLite schema has no migration tooling (acceptable for local dev logging,
+  would need proper migrations for production use)
+- Circuit breaker thresholds are hardcoded; would be config-driven in production
+
