@@ -52,3 +52,7 @@ Report: `docker run --rm --env-file .env -v "$(pwd)/logs:/app/logs" agent-ops py
 ## Status: Day 11 of 15 — Dockerized. Runs with API keys passed via
 --env-file, logs persisted via volume mount so data survives container
 restarts.
+
+## Status: Day 12 of 15 — full test suite (~19 tests) covering reliability
+layer, search/fetch tools (mocked, no real API calls), and orchestrator
+integration paths (happy path, early failure, relevance-gate rejection).
