@@ -43,3 +43,12 @@ LLM successes.
 (optionally `python report_cli.py 20` for more recent runs) to see success
 rate, per-step latency/failure breakdown, total cost, and a recent-runs table
 pulled from the observability logs.
+
+## Running with Docker
+Build: `docker build -t agent-ops .`
+Run:   `docker run --rm --env-file .env -v "$(pwd)/logs:/app/logs" agent-ops`
+Report: `docker run --rm --env-file .env -v "$(pwd)/logs:/app/logs" agent-ops python report_cli.py`
+
+## Status: Day 11 of 15 — Dockerized. Runs with API keys passed via
+--env-file, logs persisted via volume mount so data survives container
+restarts.
