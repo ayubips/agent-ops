@@ -11,6 +11,7 @@ from src.reliability import (
     call_with_protection, CircuitOpenError,
     check_relevance, LowRelevanceError
 )
+from src.observability import init_db, log_run_start, log_step, log_run_finish
 
 
 class StepStatus(Enum):
@@ -42,9 +43,11 @@ class ResearchAgent:
         self.search_breaker = CircuitBreaker(name="search", failure_threshold=3, reset_timeout=30)
         self.fetch_breaker = CircuitBreaker(name="fetch", failure_threshold=3, reset_timeout=30)
         self.llm_breaker = CircuitBreaker(name="llm", failure_threshold=3, reset_timeout=30)
+        init_db()
 
     def run(self, query: str) -> RunState:
         state = RunState(query=query)
+        log_run_start(state.run_id, query)
 
         # Step 1: search (retry + circuit breaker)
         start = time.time()
@@ -104,7 +107,7 @@ class ResearchAgent:
             ))
             return state
 
-        # Step 3: synthesize (retry + circuit breaker)
+        # Step 3: synthesize (retry + circuit breaker, with graceful fallback)
         start = time.time()
         try:
             synth_result = call_with_protection(
@@ -115,9 +118,10 @@ class ResearchAgent:
             error = None
             tokens = synth_result["tokens"]
         except (RetryExhaustedError, CircuitOpenError) as e:
-            synth_result = {"text": None}
-            status = StepStatus.FAILED
-            error = str(e)
+            # degrade gracefully instead of failing the whole run
+            synth_result = self.llm.fallback_summary(fetch_result["texts"])
+            status = StepStatus.SUCCESS  # fallback counts as a (degraded) success
+            error = f"used fallback: {e}"
             tokens = 0
         latency = (time.time() - start) * 1000
         state.steps.append(StepResult(
@@ -136,10 +140,10 @@ if __name__ == "__main__":
     print(f"Query: {state.query}\n")
     for step in state.steps:
         print(f"[{step.name}] {step.status.value} — {step.latency_ms:.0f}ms" +
-              (f" — ERROR: {step.error}" if step.error else ""))
+              (f" — NOTE: {step.error}" if step.error else ""))
 
     last_step = state.steps[-1]
-    if last_step.status == StepStatus.SUCCESS:
+    if last_step.output and last_step.output.get("text"):
         print(f"\nFinal summary:\n{last_step.output['text']}")
     else:
         print(f"\nPipeline failed at step '{last_step.name}': {last_step.error}")
