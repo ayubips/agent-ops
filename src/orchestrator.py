@@ -67,9 +67,11 @@ class ResearchAgent:
             name="search", status=status, output=search_result,
             error=error, latency_ms=latency
         ))
+        log_step(state.run_id, "search", status.value, latency, error=error)
 
         if status == StepStatus.FAILED:
-            return state  # no point continuing without search results
+            log_run_finish(state.run_id, status.value)
+            return state
 
         # Step 2: fetch (retry + circuit breaker)
         start = time.time()
@@ -89,22 +91,29 @@ class ResearchAgent:
             name="fetch", status=status, output=fetch_result,
             error=error, latency_ms=latency
         ))
+        log_step(state.run_id, "fetch", status.value, latency, error=error)
 
         if not fetch_result["texts"]:
+            no_content_error = "no fetched content available to synthesize"
             state.steps.append(StepResult(
                 name="synthesize", status=StepStatus.FAILED,
-                error="no fetched content available to synthesize"
+                error=no_content_error
             ))
+            log_step(state.run_id, "synthesize", StepStatus.FAILED.value, 0, error=no_content_error)
+            log_run_finish(state.run_id, StepStatus.FAILED.value)
             return state
 
         # Relevance gate — catches off-topic/junk results before an LLM call
         try:
             check_relevance(query, fetch_result["texts"])
         except LowRelevanceError as e:
+            relevance_error = f"relevance check failed: {e}"
             state.steps.append(StepResult(
                 name="synthesize", status=StepStatus.FAILED,
-                error=f"relevance check failed: {e}"
+                error=relevance_error
             ))
+            log_step(state.run_id, "synthesize", StepStatus.FAILED.value, 0, error=relevance_error)
+            log_run_finish(state.run_id, StepStatus.FAILED.value)
             return state
 
         # Step 3: synthesize (retry + circuit breaker, with graceful fallback)
@@ -118,16 +127,19 @@ class ResearchAgent:
             error = None
             tokens = synth_result["tokens"]
         except (RetryExhaustedError, CircuitOpenError) as e:
-            # degrade gracefully instead of failing the whole run
             synth_result = self.llm.fallback_summary(fetch_result["texts"])
             status = StepStatus.SUCCESS  # fallback counts as a (degraded) success
             error = f"used fallback: {e}"
             tokens = 0
         latency = (time.time() - start) * 1000
+        cost = self.llm.estimate_cost(tokens)
         state.steps.append(StepResult(
             name="synthesize", status=status, output=synth_result,
             error=error, latency_ms=latency, tokens_used=tokens
         ))
+        log_step(state.run_id, "synthesize", status.value, latency,
+                 tokens_used=tokens, cost_usd=cost, error=error)
+        log_run_finish(state.run_id, status.value)
 
         return state
 

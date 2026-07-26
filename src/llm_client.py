@@ -7,6 +7,12 @@ load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 class LLMClient:
+    # Approximate blended rate for llama-3.3-70b-versatile
+    # ($0.59 per 1M input tokens / $0.79 per 1M output tokens)
+    # Simplified to a blended average since we track total tokens,
+    # not input/output split separately.
+    COST_PER_1K_TOKENS = 0.0007
+
     def __init__(self):
         self.client = OpenAI(
             api_key=GROQ_API_KEY,
@@ -30,6 +36,11 @@ class LLMClient:
             "text": response.choices[0].message.content,
             "tokens": response.usage.total_tokens,
         }
+
+    def estimate_cost(self, tokens: int) -> float:
+        """Returns an approximate USD cost for a given token count."""
+        return round((tokens / 1000) * self.COST_PER_1K_TOKENS, 6)
+
     def fallback_summary(self, texts: list[str]) -> dict:
         """
         Degraded, non-LLM fallback used when synthesis is unavailable
@@ -49,5 +60,7 @@ if __name__ == "__main__":
         "The circuit breaker pattern prevents cascading failures in distributed systems."
     ]
     result = client.synthesize(fake_sources)
+    cost = client.estimate_cost(result["tokens"])
     print("SUMMARY:", result["text"])
     print("TOKENS USED:", result["tokens"])
+    print("ESTIMATED COST: $", cost)

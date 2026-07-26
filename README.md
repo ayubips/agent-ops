@@ -33,3 +33,8 @@ a pytest suite (9 tests).
   status) to SQLite, with a CLI report tool
 - Dockerization
 - Architecture diagram
+
+## Status: Day 9 of 15 — observability layer complete: structured logging
+(runs + steps tables in SQLite) with per-step latency, token usage, and
+estimated cost. Fallback-degraded runs are logged distinctly from full
+LLM successes.
