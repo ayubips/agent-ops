@@ -38,3 +38,8 @@ a pytest suite (9 tests).
 (runs + steps tables in SQLite) with per-step latency, token usage, and
 estimated cost. Fallback-degraded runs are logged distinctly from full
 LLM successes.
+
+## Status: Day 10 of 15 — CLI report tool complete. Run `python report_cli.py`
+(optionally `python report_cli.py 20` for more recent runs) to see success
+rate, per-step latency/failure breakdown, total cost, and a recent-runs table
+pulled from the observability logs.
