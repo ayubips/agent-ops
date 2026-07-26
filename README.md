@@ -18,7 +18,7 @@ distributed system.
 
 ## Architecture
 
-\```
+```
                  ┌─────────────┐
    query ──────▶│ ResearchAgent│
                  └──────┬───────┘
@@ -39,7 +39,7 @@ distributed system.
           │ relevance gate │  │  per step     │
           │ fallback path  │  └──────────────┘
           └───────────────┘
-\```
+```
 
 Each of the three pipeline steps runs through the same reliability wrapper
 (`call_with_protection`): retry with exponential backoff on transient failures,
@@ -77,7 +77,7 @@ cost.
 
 ## How to run
 
-\```bash
+```bash
 # Setup
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
@@ -95,7 +95,7 @@ python report_cli.py
 # Docker
 docker build -t agent-ops .
 docker run --rm --env-file .env -v "$(pwd)/logs:/app/logs" agent-ops
-\```
+```
 
 ## Design decisions worth noting
 
