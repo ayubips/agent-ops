@@ -20,3 +20,16 @@ confident but unrelated summary.
 fail-fast on non-retryable errors, circuit breaker, relevance gating, and
 graceful fallback (degraded response instead of hard failure). Covered by
 a pytest suite (9 tests).
+
+## What's built (Day 7/15)
+- Research agent pipeline: search → fetch → synthesize
+- Reliability layer: exponential backoff retry, fail-fast on non-retryable
+  errors (4xx), circuit breaker per dependency, relevance gating to catch
+  off-topic results, graceful fallback to a degraded response
+- 11 passing tests covering the reliability layer
+
+## What's next
+- Observability: structured logging of every run (tokens, cost, latency,
+  status) to SQLite, with a CLI report tool
+- Dockerization
+- Architecture diagram
