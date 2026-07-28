@@ -140,7 +140,7 @@ def _tokenize(text: str) -> set:
     return set(re.findall(r"[a-z0-9]+", text.lower()))
 
 
-def check_relevance(query: str, texts: list[str], min_overlap: int = 1, min_text_length: int = 200):
+def check_relevance(query: str, texts: list[str], min_overlap: int = 2, min_text_length: int = 200):
     """
     Cheap, fast guard before spending an LLM call on synthesis.
     Rejects: empty texts, texts too short to be meaningful, or texts that share
